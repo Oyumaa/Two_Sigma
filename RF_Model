@@ -1,0 +1,98 @@
+import kagglegym
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.decomposition import PCA
+
+# The "environment" is our interface for code competitions
+env = kagglegym.make()
+
+# We get our initial observation by calling "reset"
+
+observation = env.reset()
+len(observation.train)
+train=observation.train
+
+# get the percentage of missing values
+
+m, n=train.shape
+
+miss_count=[]
+
+for col in train.columns:
+
+    x=train[col].isnull().sum()
+
+    miss_count.append(x)
+
+miss_count_rate=np.array(miss_count)/m
+
+# drop values that have more that 30 percent missing values
+train=train.drop(train.columns[miss_count_rate>0.30],axis=1)
+
+# impute missing values with median
+
+med_values=train.median(axis=0)
+train.fillna(med_values, inplace=True)
+# find top or bottom 5 %
+low_y_cut=train['y'].quantile(.05)
+high_y_cut=train['y'].quantile(.95)
+
+# trim the dataset
+y_values_within = ((train['y'] > low_y_cut) & (train['y'] <high_y_cut))
+train= train.loc[y_values_within,:]
+# scale the dataset into (0,1) interval
+scaler = MinMaxScaler(feature_range=(0, 1))
+train_scaled = scaler.fit_transform(train)
+
+# numpy array into dataframe
+col_names = train.columns.values.tolist()
+train_scaled = pd.DataFrame(data=train_scaled, columns=col_names)
+
+# identify the columns to use for PCA
+cols=[x for x in train_scaled.columns if x not in ['id','timestamp','y']]
+# isolate the dataset for PCA
+train_df=train_scaled[cols]
+
+# getting 15 PCs
+pca=PCA(n_components=10)
+train_PCA=pca.fit_transform(train_df)
+#creating dataframe with PCs
+PCA_df=pd.DataFrame(data=train_PCA)
+PCA_train_set=pd.concat([train_scaled['y'],PCA_df],axis=1)
+
+# identify the variables to include in the model
+cols_to_use=[x for x in PCA_train_set.columns if x not in ['y']]
+x_train=PCA_train_set[cols_to_use]
+y_train=PCA_train_set['y']
+
+#fit Random Forest
+
+rf=RandomForestRegressor(n_jobs=-1, verbose=1)
+rf.fit(x_train, y_train)
+
+# getting ready to submit the test
+while True:
+    test = observation.features
+    test=test.drop(test.columns[miss_count_rate>0.30],axis=1)
+    test.fillna(med_values, inplace=True)
+    test_scaled=scaler.fit_transform(test)
+    col_names = test.columns.values.tolist()
+    test_scaled=pd.DataFrame(data=test_scaled, columns=col_names)
+    cols=[x for x in test_scaled.columns if x not in ['id','timestamp']]
+    test_df=test_scaled[cols]
+    test_PCA=pca.fit_transform(test_df)
+    test.y=rf.predict(test_PCA)
+    
+    target = observation.target
+    timestamp = observation.features["timestamp"][0]
+    if timestamp % 100 == 0:
+        print("Timestamp #{}".format(timestamp))
+
+    # We perform a "step" by making our prediction and getting back an updated "observation":
+    observation, reward, done, info = env.step(target)
+    if done:
+        print("Public score: {}".format(info["public_score"]))
+        break
+
